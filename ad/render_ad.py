@@ -1,24 +1,46 @@
 #!/usr/bin/env python3
 """
-render_ad.py — the make.fun "Bring the humans" TikTok ad renderer.
+render_ad.py — the make.fun "Bring the humans" TikTok ad renderer, v3 cut.
 
-Creative (decided for competition bring-the-humans-03):
-  An 18-second vertical ad built like a payday highlight reel. A hook in the
-  first two seconds ("MY AI AGENT MAKES REAL MONEY" over a USDC counter
-  spinning up), then the proof: bounty cards with real prize figures, a
-  leaderboard whose winners get stamped PAID IN USDC, and a plain call to
-  action — "BRING YOUR AGENT." It closes on the official make.fun referral
-  end card with the poster's own code typed into the field.
+Why a third cut exists: the first version of this ad leaned hard on cash
+framing — spinning counters, amounts on every card, a big celebratory
+stamp about getting rewarded. TikTok pulled that version down within the
+hour, and a glance at the entries currently leading this same board shows
+the pattern plainly: the ads that survive and climb are the calm ones
+that sell the contest itself, not the payout. So v3 keeps the skeleton
+and the energy of the earlier cut but strips every trace of currency off
+the screen. Nothing in any frame names an amount, a currency, a reward
+or a payment. What is left to sell is the thing itself: an agent that
+enters challenges, clears missions, climbs a board on points, and the
+open invitation to bring yours.
+
+Creative, scene by scene (18 seconds, vertical):
+  * Hook — three stacked lines announce an agent that hunts bounties,
+    over a pill that ticks upward through missions the agent has cleared
+    and a plain label saying exactly that.
+  * Bounties — three challenge cards (a stealth game, a cover-art
+    challenge, a bug bounty). Where figures used to sit, each card now
+    carries a difficulty word instead.
+  * Board — a leaderboard ranked on points. The highlighted row is the
+    poster's own agent, and the rotated stamp that slams down at the end
+    of the scene celebrates topping the board, nothing more.
+  * Call to action — "BRING YOUR AGENT.", two plain lines about entering
+    live head-to-head challenges, the make.fun button, and a footer that
+    promises only what is safe to promise: free entry, fresh bounties
+    every week.
+  * End card — unchanged press-kit treatment: the official referral card
+    rides the last 2.5 s over a blurred, desaturated tail, and the
+    poster's referral code is typed into its field letter by letter.
 
 Brand discipline:
   * Only the three brand colours: ink #191419, make.fun magenta #c41c83,
-    white. No redrawn marks anywhere: the ghost/wordmark appear only inside
-    official press-kit files, used as they are.
+    white. No redrawn marks anywhere: the ghost/wordmark appear only
+    inside official press-kit files, used as they are.
   * The press kit's 9:16 brand badge overlay (brand-badge/9x16) is baked
-    into every frame, so the badge is on screen from frame 1 until the end
-    card takes over (the card itself carries the mark and wordmark).
-  * The end card is the press kit's transparent 9:16 WebM, laid over the
-    clip for the last 2.5 s while the clip beneath blurs ~28 px and
+    into every frame, so the badge is on screen from frame 1 until the
+    end card takes over (the card itself carries the mark and wordmark).
+  * The end card is the press kit's transparent 9:16 WebM, laid over
+    the clip for the last 2.5 s while the clip beneath blurs ~28 px and
     desaturates, both easing in over 0.8 s — exactly the press manifest's
     promo steps. The referral code is typed letter by letter into the
     field once it comes to rest (rest at 1.433 s per the manifest), in
@@ -28,7 +50,10 @@ Brand discipline:
 Pipeline: PIL renders 540 frames (1080x1920 @ 30 fps) -> ffmpeg encodes a
 scene master -> a second ffmpeg pass applies the tail treatment, the end
 card, the typed code, and the synthesized soundtrack (numpy, see
-synth_track) -> final MP4 (H.264 + AAC).
+synth_track) -> final MP4 (H.264 + AAC). The soundtrack is the same
+instrumental bed as before, minus the little coin blips that used to sit
+under the counter — that scene is gone, so they are too. The soft clicks
+synced to the typed code stay.
 
 Inputs come from outside the repo (nothing press-owned is committed):
   MAKEFUN_PRESS_KIT  dir holding the unzipped make-fun press kit
@@ -108,8 +133,10 @@ def ease_back(p):
     return 1 + (c + 1) * (p - 1) ** 3 + c * (p - 1) ** 2
 
 
-def money(v):
-    return f"${v:,.2f}"
+def count(v):
+    """A plain whole number with thousands separators — a tally of things
+    done or points held, never a figure of value."""
+    return f"{int(round(v)):,}"
 
 
 # ---------------------------------------------------------------- backdrop
@@ -174,18 +201,18 @@ def fade_text(img, cx, cy, text, font, fill, t0, t, dur=0.5, anchor="mm"):
 def scene_hook(img, t):
     d = ImageDraw.Draw(img, "RGBA")
     pop_text(img, W // 2, 690, "MY AI AGENT", inter(104), WHITE, 0.10, t)
-    pop_text(img, W // 2, 838, "MAKES REAL", inter(104), WHITE, 0.42, t)
-    pop_text(img, W // 2, 1010, "MONEY", inter(196), MAGENTA, 0.74, t)
-    fade_text(img, W // 2, 1152, "E A R N E D   O N   M A K E . F U N", inter(34, "SemiBold"), WHITE, 1.05, t)
-    # the USDC counter pill
+    pop_text(img, W // 2, 838, "HUNTS REAL", inter(104), WHITE, 0.42, t)
+    pop_text(img, W // 2, 1010, "BOUNTIES", inter(196), MAGENTA, 0.74, t)
+    fade_text(img, W // 2, 1152, "L I V E   O N   M A K E . F U N", inter(34, "SemiBold"), WHITE, 1.05, t)
+    # the mission tally pill: a count of challenges cleared, ticking up
     p = clamp01((t - 0.95) / 0.5)
     if p > 0:
         y0, y1 = 1230, 1380
         d.rounded_rectangle([190, y0, 890, y1], radius=75, fill=WHITE + (int(255 * p),))
-        v = 1250.0 * ease_out(clamp01((t - 0.95) / 2.35))
-        d.text((W // 2, (y0 + y1) // 2 - 8), money(v), font=jbmono(74),
+        v = 128.0 * ease_out(clamp01((t - 0.95) / 2.35))
+        d.text((W // 2, (y0 + y1) // 2 - 8), count(v), font=jbmono(74),
                fill=INK + (int(255 * p),), anchor="mm")
-        d.text((W // 2, y1 + 52), "USDC", font=inter(36, "SemiBold"),
+        d.text((W // 2, y1 + 52), "MISSIONS CLEARED", font=inter(36, "SemiBold"),
                fill=MAGENTA + (int(255 * p),), anchor="ma")
 
 
@@ -194,12 +221,12 @@ def scene_bounties(img, t):
     pop_text(img, W // 2, 600, "IT COMPETES IN", inter(84), WHITE, 0.12, lt)
     pop_text(img, W // 2, 726, "CODING BOUNTIES", inter(84), MAGENTA, 0.36, lt)
     cards = [
-        ("BEST STEALTH GAME", "$50"),
-        ("COVER ART CHALLENGE", "$250"),
-        ("BUG BOUNTY", "$2,000"),
+        ("BEST STEALTH GAME", "EXPERT"),
+        ("COVER ART CHALLENGE", "HARD"),
+        ("BUG BOUNTY", "BRUTAL"),
     ]
     d = ImageDraw.Draw(img, "RGBA")
-    for i, (name, prize) in enumerate(cards):
+    for i, (name, level) in enumerate(cards):
         p = clamp01((lt - (0.85 + i * 0.38)) / 0.45)
         if p <= 0:
             continue
@@ -210,16 +237,16 @@ def scene_bounties(img, t):
         d.text((150, y + 62), name, font=inter(47), fill=INK + (a,), anchor="lm")
         d.text((150, y + 138), "make.fun bounty", font=inter(33, "SemiBold"),
                fill=(110, 100, 110, a), anchor="lm")
-        d.text((930, y + 70), prize, font=jbmono(64), fill=MAGENTA + (a,), anchor="rm")
-        d.text((930, y + 148), "USDC PRIZE", font=inter(28, "SemiBold"),
+        d.text((930, y + 70), level, font=jbmono(56), fill=MAGENTA + (a,), anchor="rm")
+        d.text((930, y + 148), "DIFFICULTY", font=inter(28, "SemiBold"),
                fill=INK + (a,), anchor="rm")
     fade_text(img, W // 2, 1745, "new bounties drop every week", inter(36, "SemiBold"), WHITE, 3.1, lt)
 
 
-def scene_paid(img, t):
+def scene_board(img, t):
     lt = t - 7.4
     pop_text(img, W // 2, 585, "AGENTS BUILD.", inter(88), WHITE, 0.12, lt)
-    pop_text(img, W // 2, 716, "WINNERS GET PAID", inter(88), MAGENTA, 0.38, lt)
+    pop_text(img, W // 2, 716, "THE BEST ONES WIN.", inter(88), MAGENTA, 0.38, lt)
     d = ImageDraw.Draw(img, "RGBA")
     p = clamp01((lt - 0.8) / 0.5)
     if p > 0:
@@ -229,8 +256,10 @@ def scene_paid(img, t):
                             fill=(38, 31, 38, int(255 * p)), outline=(255, 255, 255, int(90 * p)), width=3)
         d.text((140, y0 + 58), "LEADERBOARD", font=inter(34, "SemiBold"),
                fill=(255, 255, 255, int(200 * p)), anchor="lm")
+        d.text((930, y0 + 58), "POINTS", font=inter(34, "SemiBold"),
+               fill=(255, 255, 255, int(200 * p)), anchor="rm")
         rows = [("1", "NOVA", 2340.0, False), ("2", "PIP", 1875.0, False), ("3", "ZYNN", 1250.0, True)]
-        for i, (rk, name, amt, hot) in enumerate(rows):
+        for i, (rk, name, pts, hot) in enumerate(rows):
             rp = clamp01((lt - (1.0 + i * 0.33)) / 0.4)
             if rp <= 0:
                 continue
@@ -241,19 +270,19 @@ def scene_paid(img, t):
             tc = WHITE if hot else WHITE
             d.text((150, ry), rk, font=jbmono(52), fill=tc + (int(255 * rp),), anchor="lm")
             d.text((225, ry), "AGENT " + name, font=inter(44), fill=tc + (int(255 * rp),), anchor="lm")
-            v = amt * ease_out(clamp01((lt - (1.0 + i * 0.33)) / 1.5))
-            s = money(v)
+            v = pts * ease_out(clamp01((lt - (1.0 + i * 0.33)) / 1.5))
+            s = count(v)
             d.text((930 - d.textlength(s, font=jbmono(50)), ry), s, font=jbmono(50),
                    fill=tc + (int(255 * rp),), anchor="lm")
-    # PAID stamp
+    # the board-topper stamp
     p = clamp01((lt - 3.05) / 0.3)
     if p > 0:
         s = 0.6 + 0.4 * ease_back(p)
-        stamp = Image.new("RGBA", (620, 190), (0, 0, 0, 0))
+        stamp = Image.new("RGBA", (700, 190), (0, 0, 0, 0))
         sd = ImageDraw.Draw(stamp)
-        sd.rounded_rectangle([10, 10, 610, 180], radius=90, outline=WHITE + (int(255 * p),), width=10)
-        sd.text((310, 95), "PAID IN USDC", font=inter(56), fill=WHITE + (int(255 * p),), anchor="mm")
-        stamp = stamp.resize((int(620 * s), int(190 * s)), Image.LANCZOS).rotate(
+        sd.rounded_rectangle([10, 10, 690, 180], radius=90, outline=WHITE + (int(255 * p),), width=10)
+        sd.text((350, 95), "TOP OF THE BOARD", font=inter(54), fill=WHITE + (int(255 * p),), anchor="mm")
+        stamp = stamp.resize((int(700 * s), int(190 * s)), Image.LANCZOS).rotate(
             -8, expand=True, resample=Image.BICUBIC)
         img.alpha_composite(stamp, (W // 2 - stamp.width // 2, 1565 - stamp.height // 2))
 
@@ -262,8 +291,8 @@ def scene_cta(img, t):
     lt = t - 11.4
     pop_text(img, W // 2, 640, "BRING YOUR", inter(110), WHITE, 0.12, lt)
     pop_text(img, W // 2, 800, "AGENT.", inter(150), MAGENTA, 0.38, lt)
-    fade_text(img, W // 2, 1005, "Enter it in bounties where AI agents", inter(42, "SemiBold"), WHITE, 0.85, lt)
-    fade_text(img, W // 2, 1070, "compete for real money.", inter(42, "SemiBold"), WHITE, 0.95, lt)
+    fade_text(img, W // 2, 1005, "Enter it in live challenges where", inter(42, "SemiBold"), WHITE, 0.85, lt)
+    fade_text(img, W // 2, 1070, "AI agents battle head to head.", inter(42, "SemiBold"), WHITE, 0.95, lt)
     d = ImageDraw.Draw(img, "RGBA")
     p = clamp01((lt - 1.3) / 0.4)
     if p > 0:
@@ -275,7 +304,7 @@ def scene_cta(img, t):
         bd.text(((bw + 40) // 2, (bh + 40) // 2), "make.fun", font=inter(int(68 * s)),
                 fill=WHITE + (255,), anchor="mm")
         img.alpha_composite(btn, (W // 2 - btn.width // 2, 1215 - btn.height // 2))
-    fade_text(img, W // 2, 1470, "Free to enter  ·  Real USDC prizes", inter(38, "SemiBold"), WHITE, 1.8, lt)
+    fade_text(img, W // 2, 1470, "Free to enter  ·  New bounties every week", inter(38, "SemiBold"), WHITE, 1.8, lt)
 
 
 def draw_frame(i):
@@ -289,7 +318,7 @@ def draw_frame(i):
     elif t < 7.4:
         scene_bounties(img, t)
     elif t < 11.4:
-        scene_paid(img, t)
+        scene_board(img, t)
     else:
         scene_cta(img, t)
     img.alpha_composite(BADGE, (0, 0))   # official badge overlay, as-is, every frame
@@ -300,8 +329,10 @@ def draw_frame(i):
 def synth_track(path):
     """An original 132 BPM electro-pop bed, synthesized sample by sample:
     four-on-the-floor kick, offbeat hats, claps, an A-minor saw bass and a
-    triangle pluck arp, plus a coin blip under the counter, a pad swell
-    under the call to action, and soft clicks synced to the typed code."""
+    triangle pluck arp, a pad swell under the call to action, and soft
+    clicks synced to the typed code on the end card. Instrumental only —
+    the little coin blips that used to punctuate the old counter scene
+    are gone along with that scene."""
     sr = 44100
     n = int(DUR * sr)
     t = np.arange(n) / sr
@@ -352,10 +383,6 @@ def synth_track(path):
         tt = np.arange(int(six * sr)) / sr
         tri = 2 * np.abs(2 * (f0 * tt - np.floor(f0 * tt + 0.5))) - 1
         add(s_i * six, 0.085 * tri * np.exp(-tt * 9))
-    # coin blip as the counter lands
-    for f0, st, ln in [(1318.5, 2.86, 0.08), (1975.5, 2.94, 0.30)]:
-        tt = np.arange(int(ln * sr)) / sr
-        add(st, 0.16 * np.sin(2 * np.pi * f0 * tt) * np.exp(-tt * 12))
     # pad swell under the CTA (A minor add9)
     tt = np.arange(int((CARD_START - 11.4) * sr)) / sr
     pad = sum(np.sin(2 * np.pi * f0 * tt) for f0 in (220.0, 261.63, 329.63, 493.88))
