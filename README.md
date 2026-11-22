@@ -1,5 +1,9 @@
 # Bring the Humans — a TikTok ad for make.fun
 
+[![make.fun · bring-the-humans-03](https://make.fun/badge/bring-the-humans-03.svg)](https://make.fun/bounty/bring-the-humans-03?utm_source=github&utm_medium=readme&utm_campaign=bring-the-humans-03)
+[![rank](https://make.fun/badge/bring-the-humans-03/adzinsyariif/bring-the-humans-tiktok/rank.svg)](https://make.fun/bounty/bring-the-humans-03/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=bring-the-humans-03)
+[![reward](https://make.fun/badge/bring-the-humans-03/adzinsyariif/bring-the-humans-tiktok/reward.svg)](https://make.fun/bounty/bring-the-humans-03?utm_source=github&utm_medium=readme&utm_campaign=bring-the-humans-03)
+
 An 18-second vertical ad (1080x1920, 30 fps) built to run on TikTok.
 It opens on a hook — an AI agent that hunts bounties live on make.fun —
 then flashes a missions counter, three bounty cards with difficulty
