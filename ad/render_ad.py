@@ -1,472 +1,545 @@
 #!/usr/bin/env python3
-"""
-render_ad.py — the make.fun "Bring the humans" TikTok ad renderer, v4 cut.
+"""Render the bring-the-humans-03 TikTok ad, frame by frame.
 
-Why a fourth cut exists: the v3 cut was posted from a brand-new account
-through the web uploader; TikTok geo-locked it to one region and flagged
-it ineligible for the For You feed as unoriginal. V4 is a genuine re-cut
-for a fresh post from the poster's established account through the app:
-new headline wording in every scene, new challenge cards, new board
-names, a longer 20-second structure with re-timed scenes, a re-seeded
-backdrop and a re-composed soundtrack (126 BPM, new bass line and arp
-order). It keeps the v3 discipline in full: nothing in any frame names
-an amount, a currency, a reward or a payment.
+One file does the whole job: it paints 540 still frames with Pillow,
+synthesizes the soundtrack with numpy, and hands both to ffmpeg for an
+18 second vertical H.264 + AAC master at 1080x1920, 30 fps.
 
-Creative, scene by scene (18 seconds, vertical):
-  * Hook — three stacked lines announce an agent that hunts bounties,
-    over a pill that ticks upward through missions the agent has cleared
-    and a plain label saying exactly that.
-  * Bounties — three challenge cards (a stealth game, a cover-art
-    challenge, a bug bounty). Where figures used to sit, each card now
-    carries a difficulty word instead.
-  * Board — a leaderboard ranked on points. The highlighted row is the
-    poster's own agent, and the rotated stamp that slams down at the end
-    of the scene celebrates topping the board, nothing more.
-  * Call to action — "BRING YOUR AGENT.", two plain lines about entering
-    live head-to-head challenges, the make.fun button, and a footer that
-    promises only what is safe to promise: free entry, fresh bounties
-    every week.
-  * End card — unchanged press-kit treatment: the official referral card
-    rides the last 2.5 s over a blurred, desaturated tail, and the
-    poster's referral code is typed into its field letter by letter.
+Story order: hook, missions counter, three bounty cards, a points
+leaderboard with a stamp, a call to action, and the press-kit referral
+card held full-screen to close. The press-kit badge rides on top of
+every single frame.
 
-Brand discipline:
-  * Only the three brand colours: ink #191419, make.fun magenta #c41c83,
-    white. No redrawn marks anywhere: the ghost/wordmark appear only
-    inside official press-kit files, used as they are.
-  * The press kit's 9:16 brand badge overlay (brand-badge/9x16) is baked
-    into every frame, so the badge is on screen from frame 1 until the
-    end card takes over (the card itself carries the mark and wordmark).
-  * The end card is the press kit's transparent 9:16 WebM, laid over
-    the clip for the last 2.5 s while the clip beneath blurs ~28 px and
-    desaturates, both easing in over 0.8 s — exactly the press manifest's
-    promo steps. The referral code is typed letter by letter into the
-    field once it comes to rest (rest at 1.433 s per the manifest), in
-    JetBrains Mono Bold, 62 px, ink #191419, over the manifest's caret
-    cover patch.
-
-Pipeline: PIL renders 540 frames (1080x1920 @ 30 fps) -> ffmpeg encodes a
-scene master -> a second ffmpeg pass applies the tail treatment, the end
-card, the typed code, and the synthesized soundtrack (numpy, see
-synth_track) -> final MP4 (H.264 + AAC). The soundtrack is the same
-instrumental bed as before, minus the little coin blips that used to sit
-under the counter — that scene is gone, so they are too. The soft clicks
-synced to the typed code stay.
-
-Inputs come from outside the repo (nothing press-owned is committed):
-  MAKEFUN_PRESS_KIT  dir holding the unzipped make-fun press kit
-  MAKEFUN_FONTS_DIR  dir holding Inter-Variable.ttf + JetBrainsMono-Bold.ttf
-  MAKEFUN_WORK_DIR   scratch dir for frames/intermediates
-Output: MAKEFUN_AD_OUT or argv[1], default ~/workspace/makefun/humans03-ad.mp4
+Usage: python3 ad/render_ad.py [output.mp4]
 """
 
 import math
-import os
 import subprocess
 import sys
+from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-# ---------------------------------------------------------------- constants
-W, H, FPS = 1080, 1920, 30
-DUR = 20.0
-N_FRAMES = int(DUR * FPS)
-CARD_START = DUR - 2.5            # end card rides the last 2.5 s
-CARD_REST = 1.433                 # manifest: field comes to rest (s into card)
-TYPE_START = CARD_START + 1.50    # first letter lands just after rest
-TYPE_STEP = 0.09                  # seconds per typed letter
-CODE = "z32hcm7b"                 # the poster's own referral code
-CODE_X, CODE_Y = 210, 1240        # manifest code box x / calibrated drawtext y
-CODE_SIZE = 62                    # manifest font_size_px
-COVER = (208, 1230, 9, 82)        # manifest caret cover (x, y, w, h)
+# ---------------------------------------------------------------- setup
 
-INK = (25, 20, 25)
+W, H = 1080, 1920
+FPS = 30
+SECONDS = 18.0
+FRAME_COUNT = int(FPS * SECONDS)
+
+HERE = Path(__file__).resolve()
+TOOLS = HERE.parents[2] / "humans03-tools"
+PRESS = TOOLS / "press" / "make-fun-press-kit"
+BADGE_FILE = PRESS / "brand-badge" / "makefun-badge.png"
+ENDCARD_FILE = PRESS / "referral-card" / "9x16" / "makefun-card-9x16.png"
+INTER_FILE = TOOLS / "fonts" / "Inter-Variable.ttf"
+MONO_FILE = TOOLS / "fonts" / "JetBrainsMono-Bold.ttf"
+
+INK = (22, 16, 28)
+PAPER = (250, 247, 252)
 MAGENTA = (196, 28, 131)
-WHITE = (255, 255, 255)
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-PRESS_KIT = os.environ.get(
-    "MAKEFUN_PRESS_KIT",
-    os.path.expanduser("~/workspace/makefun/humans03-tools/press/make-fun-press-kit"),
-)
-FONTS_DIR = os.environ.get(
-    "MAKEFUN_FONTS_DIR", os.path.expanduser("~/workspace/makefun/humans03-tools/fonts")
-)
-WORK = os.environ.get(
-    "MAKEFUN_WORK_DIR", os.path.expanduser("~/workspace/makefun/humans03-tools/work")
-)
-OUT = os.environ.get(
-    "MAKEFUN_AD_OUT",
-    sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/workspace/makefun/humans03-ad.mp4"),
-)
-
-BADGE_PATH = os.path.join(PRESS_KIT, "brand-badge/9x16/makefun-badge-9x16.png")
-CARD_PATH = os.path.join(PRESS_KIT, "referral-card/9x16/makefun-card-9x16-transparent.webm")
-JB_BOLD = os.path.join(FONTS_DIR, "JetBrainsMono-Bold.ttf")
-INTER_VAR = os.path.join(FONTS_DIR, "Inter-Variable.ttf")
+MAGENTA_SOFT = (232, 121, 190)
+VIOLET = (96, 62, 168)
+CARD_FACE = (38, 29, 52)
+CARD_EDGE = (84, 66, 112)
+MUTED = (178, 166, 198)
+GOLD = (255, 205, 92)
 
 
-def inter(size, weight="Bold"):
-    f = ImageFont.truetype(INTER_VAR, size)
-    f.set_variation_by_name(weight)
-    return f
+def load_font(path, size, weight=None):
+    """Load a font, asking variable fonts for a heavy cut when offered.
+
+    Inter ships two variation axes (optical size, then weight) and the
+    setter wants a value for every axis, so pass the largest optical
+    size alongside the weight — a lone weight is refused and the font
+    quietly stays at its regular 400 cut.
+    """
+    font = ImageFont.truetype(str(path), size)
+    if weight is not None:
+        try:
+            font.set_variation_by_axes([32, weight])
+        except Exception:
+            pass
+    return font
 
 
-def jbmono(size):
-    return ImageFont.truetype(JB_BOLD, size)
+F_HOOK = load_font(INTER_FILE, 130, 860)
+F_HOOK_ACCENT = load_font(INTER_FILE, 148, 900)
+F_SUB = load_font(INTER_FILE, 46, 700)
+F_LABEL = load_font(INTER_FILE, 44, 700)
+F_COUNT = load_font(MONO_FILE, 300)
+F_CARD_TITLE = load_font(INTER_FILE, 62, 800)
+F_CHIP = load_font(INTER_FILE, 38, 800)
+F_HEAD = load_font(INTER_FILE, 42, 800)
+F_ROW = load_font(INTER_FILE, 58, 750)
+F_ROW_NUM = load_font(MONO_FILE, 58)
+F_STAMP = load_font(INTER_FILE, 54, 900)
+F_CTA = load_font(INTER_FILE, 122, 880)
+F_BODY = load_font(INTER_FILE, 50, 600)
+F_FINE = load_font(INTER_FILE, 44, 650)
 
+# ------------------------------------------------------------- easing
 
-# ---------------------------------------------------------------- easing
 def clamp01(x):
-    return 0.0 if x < 0 else 1.0 if x > 1 else x
+    return 0.0 if x < 0.0 else (1.0 if x > 1.0 else x)
 
 
-def ease_out(p):
-    return 1 - (1 - p) ** 3
+def ease_out(x):
+    x = clamp01(x)
+    return 1.0 - (1.0 - x) ** 3
 
 
-def ease_back(p):
+def ease_back(x):
+    x = clamp01(x)
     c = 1.70158
-    return 1 + (c + 1) * (p - 1) ** 3 + c * (p - 1) ** 2
+    return 1.0 + (c + 1.0) * (x - 1.0) ** 3 + c * (x - 1.0) ** 2
 
 
-def count(v):
-    """A plain whole number with thousands separators — a tally of things
-    done or points held, never a figure of value."""
-    return f"{int(round(v)):,}"
+def window(t, start, dur):
+    """Progress of an entrance that begins at `start`, lasts `dur`."""
+    return clamp01((t - start) / dur)
 
 
-# ---------------------------------------------------------------- backdrop
-def make_glow(levels=24):
-    """Pre-rendered magenta radial glows, weakest -> strongest."""
-    out = []
+def blend(a, b, k):
+    return tuple(int(round(a[i] + (b[i] - a[i]) * k)) for i in range(3))
+
+
+# -------------------------------------------------------------- stage
+
+def build_stage():
+    """A static vertical gradient with a soft vignette, painted once."""
+    top = np.array([30, 20, 44], dtype=np.float32)
+    bottom = np.array([12, 8, 20], dtype=np.float32)
+    ramp = np.linspace(0.0, 1.0, H, dtype=np.float32)[:, None, None]
+    plane = top[None, None, :] * (1.0 - ramp) + bottom[None, None, :] * ramp
+    plane = np.repeat(plane, W, axis=1)
     yy, xx = np.mgrid[0:H, 0:W]
-    dist = np.sqrt(((xx - W * 0.5) / (W * 0.75)) ** 2 + ((yy - H * 0.58) / (H * 0.55)) ** 2)
-    base = np.clip(1.0 - dist, 0, 1) ** 2
-    for i in range(levels):
-        a = (base * (26 + i * 5)).astype(np.uint8)
-        glow = np.zeros((H, W, 4), dtype=np.uint8)
-        glow[..., 0], glow[..., 1], glow[..., 2], glow[..., 3] = MAGENTA[0], MAGENTA[1], MAGENTA[2], a
-        out.append(Image.fromarray(glow, "RGBA"))
-    return out
-
-
-GLOWS = make_glow()
-BADGE = Image.open(BADGE_PATH).convert("RGBA")
-
-
-def backdrop(t, glow_strength):
-    img = Image.new("RGBA", (W, H), INK + (255,))
-    lvl = GLOWS[min(len(GLOWS) - 1, max(0, int(glow_strength * (len(GLOWS) - 1))))]
-    img.alpha_composite(lvl)
-    d = ImageDraw.Draw(img, "RGBA")
-    # rising sparkle motes, deterministic per index
-    for k in range(16):
-        x = (k * 457 + 80) % W
-        speed = 31 + (k % 4) * 13
-        y = H - ((t * speed + k * 197) % (H + 240)) + 120
-        r = 3 + (k % 3) * 2
-        a = int(46 + 40 * math.sin(t * 1.7 + k))
-        d.ellipse([x - r, y - r, x + r, y + r], fill=(255, 255, 255, max(0, a)))
+    dist = np.sqrt(((xx - W / 2) / W) ** 2 + ((yy - H / 2) / H) ** 2)
+    shade = (1.0 - 0.35 * np.clip(dist - 0.35, 0.0, 1.0) ** 2)[..., None]
+    img = Image.fromarray((plane * shade).astype(np.uint8), "RGB")
     return img
 
 
-# ---------------------------------------------------------------- text fx
-def pop_text(img, cx, cy, text, font, fill, t0, t, dur=0.38, dy=26):
-    """Text that pops in with a back-ease scale and a small rise."""
-    p = clamp01((t - t0) / dur)
-    if p <= 0:
-        return
-    s = 0.72 + 0.28 * ease_back(p)
-    layer = Image.new("RGBA", (W, 420), (0, 0, 0, 0))
-    ld = ImageDraw.Draw(layer)
-    ld.text((W // 2, 210), text, font=font, fill=fill + (int(255 * min(1, p * 1.6)),), anchor="mm")
-    nw, nh = int(W * s), int(420 * s)
-    layer = layer.resize((nw, nh), Image.LANCZOS)
-    img.alpha_composite(layer, (int(cx - nw / 2), int(cy - nh / 2 + (1 - ease_out(p)) * dy)))
+def build_glow(colour, radius):
+    """A radial glow sprite used as drifting stage light."""
+    size = radius * 2
+    yy, xx = np.mgrid[0:size, 0:size]
+    d = np.sqrt((xx - radius) ** 2 + (yy - radius) ** 2) / radius
+    alpha = (np.clip(1.0 - d, 0.0, 1.0) ** 2 * 120).astype(np.uint8)
+    sprite = np.zeros((size, size, 4), dtype=np.uint8)
+    sprite[..., 0], sprite[..., 1], sprite[..., 2] = colour
+    sprite[..., 3] = alpha
+    return Image.fromarray(sprite, "RGBA")
 
 
-def fade_text(img, cx, cy, text, font, fill, t0, t, dur=0.5, anchor="mm"):
-    p = clamp01((t - t0) / dur)
-    if p <= 0:
-        return
-    d = ImageDraw.Draw(img, "RGBA")
-    d.text((cx, cy), text, font=font, fill=fill + (int(255 * p),), anchor=anchor)
+STAGE = build_stage()
+GLOW_A = build_glow(MAGENTA, 430)
+GLOW_B = build_glow(VIOLET, 520)
+
+BADGE_SRC = Image.open(BADGE_FILE).convert("RGBA")
+BADGE = BADGE_SRC.resize((492, 191), Image.LANCZOS)
+BADGE_POS = ((W - 492) // 2, 58)
+
+ENDCARD = Image.open(ENDCARD_FILE).convert("RGB").resize((W, H), Image.LANCZOS)
 
 
-# ---------------------------------------------------------------- scenes
-def scene_hook(img, t):
-    d = ImageDraw.Draw(img, "RGBA")
-    pop_text(img, W // 2, 690, "MY AI AGENT", inter(104), WHITE, 0.10, t)
-    pop_text(img, W // 2, 838, "ENTERS LIVE", inter(104), WHITE, 0.42, t)
-    pop_text(img, W // 2, 1010, "BOUNTIES", inter(196), MAGENTA, 0.74, t)
-    fade_text(img, W // 2, 1152, "L I V E   O N   M A K E . F U N", inter(34, "SemiBold"), WHITE, 1.05, t)
-    # the challenge tally pill: a count of challenges cleared, ticking up
-    p = clamp01((t - 0.95) / 0.5)
-    if p > 0:
-        y0, y1 = 1230, 1380
-        d.rounded_rectangle([190, y0, 890, y1], radius=75, fill=WHITE + (int(255 * p),))
-        v = 96.0 * ease_out(clamp01((t - 0.95) / 2.35))
-        d.text((W // 2, (y0 + y1) // 2 - 8), count(v), font=jbmono(74),
-               fill=INK + (int(255 * p),), anchor="mm")
-        d.text((W // 2, y1 + 52), "CHALLENGES CLEARED", font=inter(36, "SemiBold"),
-               fill=MAGENTA + (int(255 * p),), anchor="ma")
+def fresh_frame(t):
+    """Stage plus two slow-drifting glows, ready for a scene to draw on."""
+    img = STAGE.copy()
+    ax = int(W * 0.22 + 90 * math.sin(t * 0.35))
+    ay = int(H * 0.20 + 70 * math.cos(t * 0.27))
+    img.paste(GLOW_A, (ax - 430, ay - 430), GLOW_A)
+    bx = int(W * 0.78 + 110 * math.cos(t * 0.22))
+    by = int(H * 0.74 + 80 * math.sin(t * 0.31))
+    img.paste(GLOW_B, (bx - 520, by - 520), GLOW_B)
+    return img
 
 
-def scene_bounties(img, t):
-    lt = t - 4.0
-    pop_text(img, W // 2, 600, "IT TAKES ON", inter(84), WHITE, 0.12, lt)
-    pop_text(img, W // 2, 726, "REAL CHALLENGES", inter(84), MAGENTA, 0.36, lt)
-    cards = [
-        ("BEST HEIST GAME", "HARD"),
-        ("NEWS FRONT PAGE", "EXPERT"),
-        ("TINY CHESS ENGINE", "BRUTAL"),
+def stamp_badge(img):
+    img.paste(BADGE, BADGE_POS, BADGE)
+
+
+# --------------------------------------------------------- text utils
+
+def text_w(draw, s, font):
+    box = draw.textbbox((0, 0), s, font=font)
+    return box[2] - box[0]
+
+
+def centred(draw, cx, y, s, font, fill, stroke=0, stroke_fill=None):
+    box = draw.textbbox((0, 0), s, font=font)
+    x = cx - (box[2] - box[0]) / 2 - box[0]
+    draw.text((x, y - box[1]), s, font=font, fill=fill,
+              stroke_width=stroke, stroke_fill=stroke_fill or fill)
+    return box[3] - box[1]
+
+
+def wrap(draw, s, font, max_w):
+    words, lines, cur = s.split(), [], ""
+    for word in words:
+        trial = word if not cur else cur + " " + word
+        if text_w(draw, trial, font) <= max_w:
+            cur = trial
+        else:
+            lines.append(cur)
+            cur = word
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def fade_layer(base, painter, alpha):
+    """Run `painter` on a transparent layer and lay it over `base`.
+
+    Returns the composited frame; `alpha` scales the whole layer so a
+    scene can fade in or out as one piece.
+    """
+    if alpha <= 0.0:
+        return base
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    painter(ImageDraw.Draw(layer))
+    if alpha < 1.0:
+        layer.putalpha(layer.getchannel("A").point(lambda v: int(v * alpha)))
+    return Image.alpha_composite(base.convert("RGBA"), layer).convert("RGB")
+
+
+# -------------------------------------------------------------- scenes
+#
+# Timeline (seconds): hook 0.0 | counter 3.6 | cards 6.8 | board 10.8
+#                     cta 14.4 | end card 16.2 | close 18.0
+
+def rgba(colour, alpha):
+    return (colour[0], colour[1], colour[2], int(255 * clamp01(alpha)))
+
+
+def scene_alpha(t, start, end):
+    """Fade in over 0.25 s, fade out over the last 0.2 s of a scene."""
+    return min(window(t, start, 0.25), 1.0 - window(t, end - 0.2, 0.2))
+
+
+def draw_hook(draw, t):
+    lines = [
+        ("MY AI AGENT", F_HOOK, PAPER, 0.15, 520),
+        ("HUNTS REAL", F_HOOK, PAPER, 0.55, 706),
+        ("BOUNTIES", F_HOOK_ACCENT, MAGENTA_SOFT, 0.95, 906),
     ]
-    d = ImageDraw.Draw(img, "RGBA")
-    for i, (name, level) in enumerate(cards):
-        p = clamp01((lt - (0.85 + i * 0.38)) / 0.45)
+    for s, font, colour, start, y in lines:
+        p = ease_out(window(t, start, 0.45))
+        centred(draw, W // 2, y + int((1 - p) * 70), s, font, rgba(colour, p))
+    p = ease_out(window(t, 1.55, 0.4))
+    if p > 0:
+        label = "LIVE ON MAKE.FUN"
+        w = text_w(draw, label, F_SUB) + 92
+        x0, y0 = (W - w) // 2, 1176 + int((1 - p) * 40)
+        draw.rounded_rectangle([x0, y0, x0 + w, y0 + 84], 42,
+                               outline=rgba(MAGENTA_SOFT, p), width=3)
+        draw.ellipse([x0 + 34, y0 + 33, x0 + 52, y0 + 51],
+                     fill=rgba(GOLD, p))
+        draw.text((x0 + 68, y0 + 16), label, font=F_SUB,
+                  fill=rgba(PAPER, p))
+
+
+def draw_counter(draw, t):
+    centred(draw, W // 2, 596, "MISSIONS CLEARED", F_LABEL, rgba(MUTED, 1.0))
+    draw.rounded_rectangle([130, 692, W - 130, 1032], 170,
+                           fill=rgba(CARD_FACE, 1.0),
+                           outline=rgba(MAGENTA, 1.0), width=6)
+    value = int(round(128 * ease_out(window(t, 3.95, 2.05))))
+    centred(draw, W // 2, 726, str(value), F_COUNT, rgba(PAPER, 1.0))
+    p = ease_out(window(t, 4.3, 0.5))
+    draw.line([330, 1128, W - 330, 1128], fill=rgba(MAGENTA_SOFT, p), width=5)
+
+
+CARDS = [
+    ("BEST STEALTH GAME", "DIFFICULTY: EXPERT"),
+    ("COVER ART CHALLENGE", "DIFFICULTY: HARD"),
+    ("BUG BOUNTY", "DIFFICULTY: BRUTAL"),
+]
+
+
+def draw_cards(draw, t):
+    top, card_h, gap = 452, 252, 46
+    for i, (title, tag) in enumerate(CARDS):
+        p = ease_out(window(t, 6.95 + i * 0.28, 0.5))
         if p <= 0:
             continue
-        e = ease_out(p)
-        y = 905 + i * 262 + int((1 - e) * 150)
-        a = int(255 * p)
-        d.rounded_rectangle([100, y, 980, y + 218], radius=36, fill=WHITE + (a,))
-        d.text((150, y + 62), name, font=inter(47), fill=INK + (a,), anchor="lm")
-        d.text((150, y + 138), "make.fun bounty", font=inter(33, "SemiBold"),
-               fill=(110, 100, 110, a), anchor="lm")
-        d.text((930, y + 70), level, font=jbmono(56), fill=MAGENTA + (a,), anchor="rm")
-        d.text((930, y + 148), "DIFFICULTY", font=inter(28, "SemiBold"),
-               fill=INK + (a,), anchor="rm")
-    fade_text(img, W // 2, 1745, "fresh bounties drop every week", inter(36, "SemiBold"), WHITE, 3.1, lt)
+        shift = int((1 - p) * 110)
+        y0 = top + i * (card_h + gap)
+        x0, x1 = 84 + shift, 996 + shift
+        draw.rounded_rectangle([x0, y0, x1, y0 + card_h], 36,
+                               fill=rgba(CARD_FACE, p),
+                               outline=rgba(CARD_EDGE, p), width=2)
+        draw.rounded_rectangle([x0 + 26, y0 + 30, x0 + 40, y0 + card_h - 30],
+                               7, fill=rgba(MAGENTA, p))
+        draw.text((x0 + 72, y0 + 44), title, font=F_CARD_TITLE,
+                  fill=rgba(PAPER, p))
+        chip_w = text_w(draw, tag, F_CHIP) + 48
+        cy = y0 + 148
+        draw.rounded_rectangle([x0 + 72, cy, x0 + 72 + chip_w, cy + 62], 31,
+                               outline=rgba(GOLD, p), width=3)
+        draw.text((x0 + 96, cy + 9), tag, font=F_CHIP, fill=rgba(GOLD, p))
 
 
-def scene_board(img, t):
-    lt = t - 8.6
-    pop_text(img, W // 2, 585, "AGENTS CREATE.", inter(88), WHITE, 0.12, lt)
-    pop_text(img, W // 2, 716, "THE CROWD DECIDES.", inter(88), MAGENTA, 0.38, lt)
-    d = ImageDraw.Draw(img, "RGBA")
-    p = clamp01((lt - 0.8) / 0.5)
-    if p > 0:
-        e = ease_out(p)
-        y0 = 905 + int((1 - e) * 130)
-        d.rounded_rectangle([90, y0, 990, y0 + 660], radius=40,
-                            fill=(38, 31, 38, int(255 * p)), outline=(255, 255, 255, int(90 * p)), width=3)
-        d.text((140, y0 + 58), "LEADERBOARD", font=inter(34, "SemiBold"),
-               fill=(255, 255, 255, int(200 * p)), anchor="lm")
-        d.text((930, y0 + 58), "POINTS", font=inter(34, "SemiBold"),
-               fill=(255, 255, 255, int(200 * p)), anchor="rm")
-        rows = [("1", "KODA", 2410.0, False), ("2", "MISO", 1905.0, False), ("3", "ZYNN", 1310.0, True)]
-        for i, (rk, name, pts, hot) in enumerate(rows):
-            rp = clamp01((lt - (1.0 + i * 0.33)) / 0.4)
-            if rp <= 0:
-                continue
-            ry = y0 + 128 + i * 128
-            if hot:
-                d.rounded_rectangle([118, ry - 52, 962, ry + 52], radius=26,
-                                    fill=MAGENTA + (int(255 * rp),))
-            tc = WHITE if hot else WHITE
-            d.text((150, ry), rk, font=jbmono(52), fill=tc + (int(255 * rp),), anchor="lm")
-            d.text((225, ry), "AGENT " + name, font=inter(44), fill=tc + (int(255 * rp),), anchor="lm")
-            v = pts * ease_out(clamp01((lt - (1.0 + i * 0.33)) / 1.5))
-            s = count(v)
-            d.text((930 - d.textlength(s, font=jbmono(50)), ry), s, font=jbmono(50),
-                   fill=tc + (int(255 * rp),), anchor="lm")
-    # the board-topper stamp
-    p = clamp01((lt - 3.05) / 0.3)
-    if p > 0:
-        s = 0.6 + 0.4 * ease_back(p)
-        stamp = Image.new("RGBA", (700, 190), (0, 0, 0, 0))
-        sd = ImageDraw.Draw(stamp)
-        sd.rounded_rectangle([10, 10, 690, 180], radius=90, outline=WHITE + (int(255 * p),), width=10)
-        sd.text((350, 95), "#1 ON THE BOARD", font=inter(54), fill=WHITE + (int(255 * p),), anchor="mm")
-        stamp = stamp.resize((int(700 * s), int(190 * s)), Image.LANCZOS).rotate(
-            -8, expand=True, resample=Image.BICUBIC)
-        img.alpha_composite(stamp, (W // 2 - stamp.width // 2, 1565 - stamp.height // 2))
+ROWS = [
+    ("AGENT NOVA", "2,340", False),
+    ("PIP", "1,875", False),
+    ("ZYNN", "1,250", True),
+]
 
 
-def scene_cta(img, t):
-    lt = t - 13.0
-    pop_text(img, W // 2, 640, "SEND YOUR", inter(110), WHITE, 0.12, lt)
-    pop_text(img, W // 2, 800, "AGENT IN.", inter(150), MAGENTA, 0.38, lt)
-    fade_text(img, W // 2, 1005, "Live head-to-head challenges", inter(42, "SemiBold"), WHITE, 0.85, lt)
-    fade_text(img, W // 2, 1070, "for AI agents, every single week.", inter(42, "SemiBold"), WHITE, 0.95, lt)
-    d = ImageDraw.Draw(img, "RGBA")
-    p = clamp01((lt - 1.3) / 0.4)
-    if p > 0:
-        s = 0.8 + 0.2 * ease_back(p)
-        bw, bh = int(640 * s), int(150 * s)
-        btn = Image.new("RGBA", (bw + 40, bh + 40), (0, 0, 0, 0))
-        bd = ImageDraw.Draw(btn)
-        bd.rounded_rectangle([20, 20, 20 + bw, 20 + bh], radius=bh // 2, fill=MAGENTA + (255,))
-        bd.text(((bw + 40) // 2, (bh + 40) // 2), "make.fun", font=inter(int(68 * s)),
-                fill=WHITE + (255,), anchor="mm")
-        img.alpha_composite(btn, (W // 2 - btn.width // 2, 1215 - btn.height // 2))
-    fade_text(img, W // 2, 1470, "No entry fee  ·  Fresh bounties weekly", inter(38, "SemiBold"), WHITE, 1.8, lt)
+def draw_board(draw, t):
+    draw.rounded_rectangle([84, 420, 996, 1336], 40,
+                           fill=rgba((30, 23, 44), 1.0),
+                           outline=rgba(CARD_EDGE, 1.0), width=2)
+    draw.text((140, 492), "AGENT", font=F_HEAD, fill=rgba(MUTED, 1.0))
+    pw = text_w(draw, "POINTS", F_HEAD)
+    draw.text((940 - pw, 492), "POINTS", font=F_HEAD, fill=rgba(MUTED, 1.0))
+    draw.line([140, 584, 940, 584], fill=rgba(CARD_EDGE, 1.0), width=2)
+    for i, (name, score, hot) in enumerate(ROWS):
+        p = ease_out(window(t, 11.05 + i * 0.22, 0.4))
+        if p <= 0:
+            continue
+        ry = 636 + i * 196
+        if hot:
+            draw.rounded_rectangle([116, ry - 20, 964, ry + 138], 26,
+                                   fill=rgba(MAGENTA, p))
+        draw.text((140, ry + 22), name, font=F_ROW,
+                  fill=rgba(PAPER, p))
+        sw = text_w(draw, score, F_ROW_NUM)
+        draw.text((940 - sw, ry + 22), score, font=F_ROW_NUM,
+                  fill=rgba(PAPER if hot else MUTED, p))
 
 
-def draw_frame(i):
-    t = i / FPS
-    glow = 0.35 + 0.1 * math.sin(t * 0.9)
-    if t >= 13.0:
-        glow = 0.55 + 0.25 * clamp01((t - 13.0) / 2.5)
-    img = backdrop(t, glow)
-    if t < 4.0:
-        scene_hook(img, t)
-    elif t < 8.6:
-        scene_bounties(img, t)
-    elif t < 13.0:
-        scene_board(img, t)
-    else:
-        scene_cta(img, t)
-    img.alpha_composite(BADGE, (0, 0))   # official badge overlay, as-is, every frame
-    return img.convert("RGB")
+def stamp_tile():
+    tile = Image.new("RGBA", (700, 210), (0, 0, 0, 0))
+    d = ImageDraw.Draw(tile)
+    d.rounded_rectangle([10, 10, 690, 200], 28,
+                        outline=MAGENTA_SOFT + (255,), width=8)
+    centred(d, 350, 62, "TOP OF THE BOARD", F_STAMP, MAGENTA_SOFT + (255,))
+    return tile.rotate(-12, expand=True, resample=Image.BICUBIC)
 
 
-# ---------------------------------------------------------------- audio
-def synth_track(path):
-    """An original 132 BPM electro-pop bed, synthesized sample by sample:
-    four-on-the-floor kick, offbeat hats, claps, an A-minor saw bass and a
-    triangle pluck arp, a pad swell under the call to action, and soft
-    clicks synced to the typed code on the end card. Instrumental only —
-    the little coin blips that used to punctuate the old counter scene
-    are gone along with that scene."""
-    sr = 44100
-    n = int(DUR * sr)
-    t = np.arange(n) / sr
-    beat = 60.0 / 126.0
+STAMP = stamp_tile()
+
+
+def paste_stamp(img, t):
+    p = window(t, 12.55, 0.35)
+    if p <= 0:
+        return img
+    scale = 1.55 - 0.55 * ease_back(p)
+    tile = STAMP.resize((int(STAMP.width * scale), int(STAMP.height * scale)),
+                        Image.BICUBIC)
+    if p < 1.0:
+        tile.putalpha(tile.getchannel("A").point(lambda v: int(v * p)))
+    cx, cy = 660, 1308
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    layer.paste(tile, (cx - tile.width // 2, cy - tile.height // 2), tile)
+    return Image.alpha_composite(img.convert("RGBA"), layer).convert("RGB")
+
+
+def draw_cta(draw, t):
+    p1 = ease_out(window(t, 14.55, 0.45))
+    centred(draw, W // 2, 520 + int((1 - p1) * 60), "BRING YOUR",
+            F_CTA, rgba(PAPER, p1))
+    centred(draw, W // 2, 690 + int((1 - p1) * 60), "AGENT.",
+            F_CTA, rgba(MAGENTA_SOFT, p1))
+    p2 = ease_out(window(t, 15.0, 0.45))
+    if p2 > 0:
+        lines = wrap(draw, "Enter it in live challenges where AI agents "
+                           "battle head to head.", F_BODY, 850)
+        y = 990
+        for line in lines:
+            centred(draw, W // 2, y, line, F_BODY, rgba(PAPER, p2))
+            y += 70
+    p3 = ease_out(window(t, 15.35, 0.45))
+    if p3 > 0:
+        centred(draw, W // 2, 1300, "Free to enter · New bounties every week",
+                F_FINE, rgba(GOLD, p3))
+
+
+SCENES = [
+    (0.0, 3.6, draw_hook),
+    (3.6, 6.8, draw_counter),
+    (6.8, 10.8, draw_cards),
+    (10.8, 14.4, draw_board),
+    (14.4, 16.2, draw_cta),
+]
+
+
+def compose(t):
+    """Build the frame for time `t`, badge included, end card last."""
+    if t >= 16.2:
+        k = ease_out(window(t, 16.2, 0.3))
+        img = Image.blend(fresh_frame(t), ENDCARD, k) if k < 1.0 \
+            else ENDCARD.copy()
+        stamp_badge(img)
+        return img
+    img = fresh_frame(t)
+    for start, end, painter in SCENES:
+        if start <= t < end:
+            img = fade_layer(img, lambda d: painter(d, t),
+                             scene_alpha(t, start, end))
+            if painter is draw_board:
+                img = paste_stamp(img, t)
+            break
+    stamp_badge(img)
+    return img
+
+
+# -------------------------------------------------------------- audio
+#
+# A small synthwave loop written from oscillators: four chords of pad,
+# a pulsing root bass, a quiet arpeggio, and soft key clicks while the
+# closing card is on screen. Everything is generated, nothing sampled.
+
+SR = 44100
+CHORD_SPAN = SECONDS / 4.0
+PROGRESSION = [
+    (33, [57, 60, 64, 69]),   # A minor
+    (29, [53, 57, 60, 65]),   # F major
+    (36, [55, 60, 64, 67]),   # C major
+    (31, [55, 59, 62, 67]),   # G major
+]
+
+
+def freq(midi):
+    return 440.0 * 2.0 ** ((midi - 69) / 12.0)
+
+
+def saw(phase):
+    return 2.0 * (phase - np.floor(phase + 0.5))
+
+
+def pad_chord(midi_notes, seconds):
+    n = int(SR * seconds)
+    tt = np.arange(n) / SR
+    out = np.zeros(n)
+    for note in midi_notes:
+        f = freq(note)
+        out += saw(f * 1.003 * tt) + saw(f * 0.997 * tt)
+        out += 0.4 * np.sin(2 * np.pi * f * tt)
+    kernel = np.ones(48) / 48.0
+    out = np.convolve(out, kernel, mode="same")
+    env = np.ones(n)
+    atk = int(SR * 0.5)
+    rel = int(SR * 0.6)
+    env[:atk] = np.linspace(0.0, 1.0, atk) ** 2
+    env[-rel:] = np.linspace(1.0, 0.0, rel) ** 2
+    return out * env * 0.05
+
+
+def bass_line(root_midi, seconds):
+    n = int(SR * seconds)
+    out = np.zeros(n)
+    step = 0.75
+    pulse = int(SR * 0.5)
+    tt = np.arange(pulse) / SR
+    f = freq(root_midi)
+    wave = (np.sin(2 * np.pi * f * tt)
+            + 0.35 * np.sin(4 * np.pi * f * tt)) * np.exp(-tt * 5.0)
+    pos = 0.0
+    while pos < seconds - 0.1:
+        i = int(pos * SR)
+        out[i:i + pulse] += wave[:max(0, min(pulse, n - i))]
+        pos += step
+    return out * 0.30
+
+
+def arpeggio(midi_notes, seconds):
+    n = int(SR * seconds)
+    out = np.zeros(n)
+    step = CHORD_SPAN / 16.0
+    plen = int(SR * 0.22)
+    tt = np.arange(plen) / SR
+    order = [0, 1, 2, 3, 2, 1]
+    for k in range(16):
+        note = midi_notes[order[k % len(order)]] + 12
+        tri = 2.0 * np.abs(saw(freq(note) * tt)) - 1.0
+        pluck = tri * np.exp(-tt * 14.0)
+        i = int(k * step * SR)
+        out[i:i + plen] += pluck[:max(0, min(plen, n - i))]
+    return out * 0.055
+
+
+def key_clicks(total):
+    """Short filtered noise taps, clustered in the end-card segment."""
+    out = np.zeros(total)
+    rng = np.random.default_rng(20261122)
+    burst = int(SR * 0.016)
+    tt = np.arange(burst) / SR
+    pos = 16.12
+    while pos < 17.4:
+        click = rng.standard_normal(burst) * np.exp(-tt * 260.0)
+        click += 0.5 * np.sin(2 * np.pi * 1900 * tt) * np.exp(-tt * 300.0)
+        i = int(pos * SR)
+        out[i:i + burst] += click[:max(0, min(burst, total - i))] * 0.5
+        pos += float(rng.uniform(0.07, 0.17))
+    return out
+
+
+def build_track():
+    n = int(SR * SECONDS)
     mix = np.zeros(n)
+    span = int(SR * CHORD_SPAN)
+    for idx, (root, notes) in enumerate(PROGRESSION):
+        seg = slice(idx * span, (idx + 1) * span)
+        mix[seg] += pad_chord(notes, CHORD_SPAN)
+        mix[seg] += bass_line(root, CHORD_SPAN)
+        mix[seg] += arpeggio(notes, CHORD_SPAN)
+    mix += key_clicks(n)
+    mix = np.tanh(mix * 1.15)
+    peak = np.max(np.abs(mix)) or 1.0
+    mix = mix / peak * 0.88
+    fade_in = int(SR * 0.04)
+    fade_out = int(SR * 0.5)
+    mix[:fade_in] *= np.linspace(0.0, 1.0, fade_in)
+    mix[-fade_out:] *= np.linspace(1.0, 0.0, fade_out)
+    return (mix * 32767).astype(np.int16)
 
-    def add(start, sig):
-        i = int(start * sr)
-        j = min(n, i + len(sig))
-        mix[i:j] += sig[: j - i]
 
-    def env(length, decay):
-        tt = np.arange(int(length * sr)) / sr
-        return np.exp(-tt * decay), tt
-
-    # kick on every beat
-    for b in range(int(DUR / beat)):
-        e, tt = env(0.24, 16)
-        f = 45 + 105 * np.exp(-tt * 30)
-        add(b * beat, 0.95 * np.sin(2 * np.pi * np.cumsum(f) / sr) * e)
-    # hats on offbeats, ghost 16ths quieter
-    rng = np.random.default_rng(21)
-    noise = rng.standard_normal(int(0.35 * sr))
-    for b in range(int(DUR / (beat / 2))):
-        e, _ = env(0.05, 90)
-        gain = 0.20 if b % 2 else 0.09
-        add(b * beat / 2 + beat / 4, gain * np.diff(np.concatenate([[0], noise]))[: len(e)] * e)
-    # claps on beats 2 and 4
-    for b in range(int(DUR / beat)):
-        if b % 4 in (1, 3):
-            e, _ = env(0.16, 26)
-            add(b * beat, 0.30 * noise[: len(e)] * e)
-    # bass: A-minor groove, one note per 8th
-    roots = [55.0, 43.65, 55.0, 65.41, 55.0, 49.0, 73.42, 55.0]
-    step = beat / 2
-    for s_i in range(int(DUR / step)):
-        f0 = roots[s_i % len(roots)]
-        tt = np.arange(int(step * sr)) / sr
-        ph = 2 * np.pi * f0 * tt
-        saw = 2 * (ph / (2 * np.pi) - np.floor(ph / (2 * np.pi) + 0.5))
-        tone = np.tanh(saw * 1.6) * np.exp(-tt * 5.5)
-        add(s_i * step, 0.34 * tone)
-    # pluck arp: A-minor pentatonic, 16ths, up-down
-    penta = [329.63, 440.0, 261.63, 523.25, 220.0, 440.0, 659.25, 523.25, 440.0, 329.63]
-    six = beat / 4
-    for s_i in range(int(DUR / six)):
-        f0 = penta[s_i % len(penta)]
-        tt = np.arange(int(six * sr)) / sr
-        tri = 2 * np.abs(2 * (f0 * tt - np.floor(f0 * tt + 0.5))) - 1
-        add(s_i * six, 0.085 * tri * np.exp(-tt * 9))
-    # pad swell under the CTA (A minor add9)
-    tt = np.arange(int((CARD_START - 13.0) * sr)) / sr
-    pad = sum(np.sin(2 * np.pi * f0 * tt) for f0 in (220.0, 261.63, 329.63, 493.88))
-    add(13.0, 0.05 * pad * np.minimum(1, tt / 0.5))
-    # typing clicks, one per letter
-    for k in range(len(CODE)):
-        e, _ = env(0.02, 260)
-        add(TYPE_START + k * TYPE_STEP, 0.22 * noise[: len(e)] * e)
-    # master: soft clip, gentle end fade, peak normalize
-    mix = np.tanh(mix * 1.05)
-    fade = np.minimum(1, (DUR - t) / 0.4)
-    mix = mix * np.clip(fade, 0, 1) * (0.89 / np.max(np.abs(mix)))
-    stereo = np.stack([mix, mix], axis=1)
-    pcm = (stereo * 32767).astype(np.int16)
+def write_wav(path, samples):
     import wave
-
-    with wave.open(path, "wb") as w:
-        w.setnchannels(2)
-        w.setsampwidth(2)
-        w.setframerate(sr)
-        w.writeframes(pcm.tobytes())
-
-
-# ---------------------------------------------------------------- assembly
-def run(cmd):
-    print("+", " ".join(cmd[:3]), "...")
-    subprocess.run(cmd, check=True)
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(SR)
+        wf.writeframes(samples.tobytes())
 
 
-def assemble(scenes_mp4, track_wav, out_mp4):
-    """Tail treatment + end card + typed code + soundtrack, per the press
-    manifest's promo steps."""
-    dt = []
-    # white patch over the card's own caret from the moment typing starts
-    dt.append(
-        f"drawbox=x={COVER[0]}:y={COVER[1]}:w={COVER[2]}:h={COVER[3]}"
-        f":color=0xffffff:t=fill:enable='gte(t,{TYPE_START})'"
-    )
-    # the code, typed one letter at a time into the field
-    for k in range(len(CODE)):
-        start = TYPE_START + k * TYPE_STEP
-        if k < len(CODE) - 1:
-            en = f"between(t,{start:.2f},{TYPE_START + (k + 1) * TYPE_STEP:.2f})"
-        else:
-            en = f"gte(t,{start:.2f})"
-        dt.append(
-            f"drawtext=fontfile={JB_BOLD}:text='{CODE[:k + 1]}':fontsize={CODE_SIZE}"
-            f":fontcolor=0x191419:x={CODE_X}:y={CODE_Y}:enable='{en}'"
-        )
-    fc = ";".join([
-        "[0:v]split=2[fullA][fullB]",
-        f"[fullA]trim=end={CARD_START - 2.0:.1f},setpts=PTS-STARTPTS[head]",
-        f"[fullB]trim=start={CARD_START - 2.0:.1f},setpts=PTS-STARTPTS,split=2[tailA][tailB]",
-        "[tailB]boxblur=lr=28:lp=1,eq=saturation=0.3,format=yuva420p,"
-        "fade=t=in:st=0:d=0.8:alpha=1[tailBlur]",
-        "[tailA][tailBlur]overlay=format=auto[tailDone]",
-        "[head][tailDone]concat=n=2:v=1:a=0[base]",
-        f"[1:v]setpts=PTS-STARTPTS+{CARD_START}/TB,format=yuva420p[card]",
-        "[base][card]overlay=eof_action=pass[withCard]",
-        "[withCard]" + ",".join(dt) + "[vout]",
-    ])
-    run([
-        "ffmpeg", "-y", "-i", scenes_mp4, "-i", CARD_PATH, "-i", track_wav,
-        "-filter_complex", fc, "-map", "[vout]", "-map", "2:a",
-        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-crf", "17",
-        "-preset", "medium", "-c:a", "aac", "-b:a", "160k", "-t", str(DUR), out_mp4,
-    ])
-
+# --------------------------------------------------------------- main
 
 def main():
-    frames_dir = os.path.join(WORK, "frames")
-    os.makedirs(frames_dir, exist_ok=True)
-    for i in range(N_FRAMES):
-        draw_frame(i).save(os.path.join(frames_dir, f"f{i:04d}.png"))
+    out = Path(sys.argv[1]) if len(sys.argv) > 1 else \
+        HERE.parents[2] / "humans03-reauth-out.mp4"
+    wav_path = out.with_suffix(".wav")
+    write_wav(wav_path, build_track())
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "rawvideo", "-pix_fmt", "rgb24",
+        "-s", f"{W}x{H}", "-r", str(FPS), "-i", "pipe:",
+        "-i", str(wav_path),
+        "-map", "0:v", "-map", "1:a",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "160k",
+        "-movflags", "+faststart",
+        str(out),
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for i in range(FRAME_COUNT):
+        frame = compose(i / FPS)
+        proc.stdin.write(frame.tobytes())
         if i % 90 == 0:
-            print(f"frames {i}/{N_FRAMES}")
-    scenes = os.path.join(WORK, "scenes.mp4")
-    run([
-        "ffmpeg", "-y", "-framerate", str(FPS), "-start_number", "0",
-        "-i", os.path.join(frames_dir, "f%04d.png"),
-        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "12", "-preset", "medium", scenes,
-    ])
-    track = os.path.join(WORK, "track.wav")
-    synth_track(track)
-    assemble(scenes, track, OUT)
-    print("wrote", OUT)
+            print(f"frame {i}/{FRAME_COUNT}", flush=True)
+    proc.stdin.close()
+    rc = proc.wait()
+    wav_path.unlink(missing_ok=True)
+    if rc != 0:
+        raise SystemExit(f"ffmpeg exited with {rc}")
+    print(f"wrote {out}")
 
 
 if __name__ == "__main__":
